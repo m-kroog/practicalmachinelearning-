@@ -1,0 +1,95 @@
+---
+title: "Practical Machine Learning Project"
+author: "Michael Kroog"
+date: "January 24, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+##Summary
+
+The purpose of this report is to create a machine learning model which can predict a certain classification of the Unilateral Dumbbell Biceps Curl. The data comes from a human activity recognition study which aims to investigate "how well" an activity was performed. The data comes from this source-http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har.
+
+Random Forest, CART, Bagging and Boosting prediction models were selected and compared by accuracy, elapsed time and out of sample error. All the models were run using 10-fold cross validation except for the Random Forest model which doesn't need CV since about 1/3 of the cases are left out of the bootstrap sample from the original data. Although for a sample size as large are we are using 10-folds maybe be a bit much, it was select to ensure low bias.
+```{r}
+download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", "training.csv")
+download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv", "testing.csv")
+
+training <- read.csv("training.csv")
+testing <- read.csv("testing.csv")
+
+library(caret)
+library(mlbench)
+library(parallel)
+library(doParallel)
+
+set.seed(18)
+
+training <- training[,(sapply(training, function(x) sum(is.na(x))) < (nrow(training) * 0.5)) == TRUE] #subset the columns where the number of NA's are less than 50% of the total observations
+
+#the following removes varaibles with missing values or that aren't related to measurments
+training <- training[,-grep("^kurtosis", names(training))]
+training <- training[,-grep("^skewness", names(training))]
+training <- training[,-grep("^max", names(training))]
+training <- training[,-grep("^min", names(training))]
+training <- training[,-grep("^amplitude", names(training))]
+training <- training[,6:60]
+
+fitControl <- trainControl(method = "cv", number = 10, allowParallel = TRUE) #setting 10 fold cross validation
+
+cluster <- makeCluster(detectCores() - 1) #enable parallel processing
+registerDoParallel(cluster)
+
+#rf
+rfTime <- system.time(modFitrf <- train(classe ~ ., method = "rf", data = training))
+
+predRf <- predict(modFitrf, testing)
+ooseRf <- 1 - modFitrf$results[2,2]
+
+#rpart
+rpartTime <- system.time(modFitrpart <- train(classe ~ ., method ="rpart", data = training, trControl = fitControl))
+
+predRpart <- predict(modFitrpart, testing)
+ooseRpart <- 1 - modFitrpart$results[1,2]
+
+#bagging
+bagTime <- system.time(modFitbag <- train(classe ~ ., method = "treebag", data = training, trControl = fitControl))
+
+predBag <- predict(modFitbag, testing)
+ooseBag <- 1 - modFitbag$results[1,2]
+
+#boosting
+boostTime <- system.time(modFitgbm <- train(classe ~ ., method = "gbm", data = training, trControl = fitControl, verbose = FALSE))
+
+predBoost <- predict(modFitgbm, testing)
+ooseBoost <- 1 - modFitgbm$results[9,5]
+
+stopCluster(cluster)
+registerDoSEQ()
+
+# creating data frame of time and accuracy
+ModTime <- c(rfTime[3], rpartTime[3], bagTime[3], boostTime[3])
+ModAcc <- round(c(modFitrf$results[2,2], modFitrpart$results[1,2], modFitbag$results[1,2], modFitgbm$results[9,5]), 4)
+ModType <- c("rf", "rpart", "bag", "boost")
+ModOOSE <- round(c(ooseRf[1], ooseRpart[1], ooseBag[1], ooseBoost[1]), 4)
+ModResults <- data.frame(ModType, ModAcc, ModTime, ModOOSE)
+ModResults
+
+predBag
+```
+##Conclusion
+
+The table above shows that the Random Forest model has the highest accuracy and therefore the lowest error, while CART models has the lowest accuracy and highest error. However the Bagging and Boosting models also have extremely low error. Since Random Forest, Bagging and Boosting all have similar error I also looked at the elapsed time it took the run the models. All models are run with no other programs running. Random Forest took 38.46 minutes, Bagging took 1.47 minutes and Boosting took 4.98 minutes. It is possible a more powerful machine could greatly reduce the time for a Random Forest model, but in my particular case if I need to train multiple models on data sets as large as this I would more forward with Bagging as the difference in error is very little, but the difference in elapsed time is significant.
+
+The first plot shows the error rate per number of trees in the Random Forest Model. Even though this model performed 500 trees, it looks like the lowest error plateaus off around 150 trees.
+
+The second plot shows the accuracy per number of iterations in the Boosting model. This model has the most accuracy at around 150 iterations on an interaction depth of 3.
+
+```{r}
+plot(modFitrf$finalModel, ann = FALSE)
+title(xlab = "Number of Trees", ylab = "Error", main = "Random Forest Error")
+
+plot(modFitgbm)
+```
